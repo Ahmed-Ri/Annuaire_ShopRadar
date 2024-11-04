@@ -16,9 +16,10 @@ class CreateCategoriesTable extends Migration
             $table->string('id')->primary(); // Utiliser une chaîne de caractères comme clé primaire
             $table->string('name');
             $table->string('image')->nullable();
+            $table->string('type')->nullable(); // Ajouter le champ 'type'
             $table->string('parent_id')->nullable(); // `parent_id` sera également une chaîne
             $table->timestamps();
-    
+ 
             // Clé étrangère pour `parent_id` reliant une catégorie à une autre
             $table->foreign('parent_id')->references('id')->on('categories')->onDelete('cascade');
         });

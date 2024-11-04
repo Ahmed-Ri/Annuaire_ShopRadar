@@ -12,7 +12,7 @@ class Category extends Model
     public $incrementing = false;
 
     // Définir les attributs pouvant être remplis
-    protected $fillable = ['id', 'name', 'image', 'parent_id'];
+    protected $fillable = ['id', 'name', 'image', 'parent_id', 'type'];
 
     // Relation : une catégorie peut avoir plusieurs sous-catégories (enfants)
     public function children()
@@ -32,5 +32,21 @@ class Category extends Model
         return $this->belongsToMany(Magasin::class, 'magasin_category')
                     ->withPivot('type', 'subcategory_id', 'main_category_id')
                     ->withTimestamps();
+    }
+
+    // Méthode pour déterminer le type de la catégorie
+    public function isMainCategory()
+    {
+        return $this->type === 'category';
+    }
+
+    public function isSubcategory()
+    {
+        return $this->type === 'subcategory';
+    }
+
+    public function isSubsubcategory()
+    {
+        return $this->type === 'subsubcategory';
     }
 }

@@ -10,128 +10,112 @@ class ImportController extends Controller
 {
     public function importCategoriesFromCsv()
     {
-        // Chemin complet du fichier CSV dans `storage/app`
         $filePath = storage_path('app/categories.csv');
-    
-        // Vérifiez que le fichier existe avant de continuer
+
         if (!file_exists($filePath)) {
             return response()->json(['error' => 'Le fichier CSV est introuvable.'], 404);
         }
-    
-        // Lire le contenu du fichier et supprimer le BOM s'il est présent
+
         $fileContent = file_get_contents($filePath);
-        $fileContent = preg_replace('/^\x{FEFF}/u', '', $fileContent); // Supprime le BOM
+        $fileContent = preg_replace('/^\x{FEFF}/u', '', $fileContent);
         $csvData = array_map('str_getcsv', explode("\n", $fileContent));
-        
-        // Enlève la première ligne contenant les en-têtes
+
         $headers = array_shift($csvData);
-    
+
         foreach ($csvData as $row) {
-            // Ignore les lignes vides ou incomplètes
             if (count($row) !== count($headers)) {
                 continue;
             }
-    
+
             $rowData = array_combine($headers, $row);
-    
-            // Vérifiez que toutes les clés sont définies dans $rowData
-            if (!isset($rowData['magasin_id']) || !isset($rowData['category_id']) || !isset($rowData['type'])) {
+
+            if (!isset($rowData['magasin_id']) || !isset($rowData['category_id'])) {
                 continue;
             }
-    
+
             $magasinId = $rowData['magasin_id'];
             $categoryId = $rowData['category_id'];
-            $type = $rowData['type'];
-    
-            // Insérer la hiérarchie en fonction du type
-            if ($type === 'category') {
-                $this->insertCategoryHierarchy($magasinId, $categoryId, true);
-            } elseif ($type === 'subcategory') {
-                $this->insertCategoryHierarchy($magasinId, $categoryId, false);
-            } elseif ($type === 'subsubcategory') {
-                $this->insertSubsubcategory($magasinId, $categoryId);
-            }
+
+            // Appeler la méthode qui gère l'insertion de la hiérarchie
+            $this->insertCategoryHierarchyWithoutSelf($magasinId, $categoryId);
         }
-    
+
         return response()->json(['message' => 'Importation terminée avec succès']);
     }
-    
-    // Fonction pour insérer les sous-catégories et sous-sous-catégories uniquement
-    private function insertCategoryHierarchy($magasinId, $categoryId, $isMainCategory)
+
+    private function insertCategoryHierarchyWithoutSelf($magasinId, $categoryId)
     {
-        // Récupère la catégorie de base
         $category = Category::find($categoryId);
-    
+
         if (!$category) {
-            return; // Si la catégorie n'existe pas, arrêtez l'exécution
+            return;
         }
-    
-        // Logique d'insertion pour les sous-catégories et sous-sous-catégories
-        if ($isMainCategory) {
-            // Pour une catégorie principale, insérer toutes les sous-catégories et sous-sous-catégories
-            foreach ($category->children as $subcat) {
-                // Insertion de chaque sous-catégorie
-                DB::table('magasin_category')->insert([
-                    'magasin_id' => $magasinId,
-                    'category_id' => $subcat->id,
-                    'subcategory_id' => $subcat->id,
-                    'main_category_id' => $categoryId,
-                    'type' => 'subcategory',
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-    
-                // Insertion des sous-sous-catégories pour chaque sous-catégorie
-                foreach ($subcat->children as $subsubcat) {
-                    DB::table('magasin_category')->insert([
-                        'magasin_id' => $magasinId,
-                        'category_id' => $subsubcat->id,
-                        'subcategory_id' => $subcat->id,
-                        'main_category_id' => $categoryId,
-                        'type' => 'subsubcategory',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                }
-            }
-        } else {
-            // Pour une sous-catégorie, insérer uniquement les sous-sous-catégories correspondantes
+
+        // Cas 1: Si c'est une catégorie principale, insérer uniquement ses sous-catégories et sous-sous-catégories
+        if ($category->parent_id === null) {
+            $this->insertDescendants($magasinId, $category);
+        }
+        // Cas 2: Si c'est une sous-catégorie, insérer uniquement les sous-sous-catégories sans insérer la sous-catégorie elle-même ni la catégorie principale
+        elseif ($category->parent && $category->parent->parent_id === null) {
+            // Insérer uniquement les sous-sous-catégories de cette sous-catégorie
             foreach ($category->children as $subsubcat) {
-                DB::table('magasin_category')->insert([
-                    'magasin_id' => $magasinId,
-                    'category_id' => $subsubcat->id,
-                    'subcategory_id' => $categoryId,
-                    'main_category_id' => $category->parent_id,
-                    'type' => 'subsubcategory',
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
+                $this->insertCategoryWithType($magasinId, $subsubcat, 'subsubcategory');
+            }
+        }
+        // Cas 3: Si c'est une sous-sous-catégorie, insérer uniquement elle-même
+        else {
+            $this->insertCategoryWithType($magasinId, $category, 'subsubcategory');
+        }
+    }
+
+    private function insertDescendants($magasinId, $category)
+    {
+        // Gère les descendants des catégories principales seulement (sous-catégories et sous-sous-catégories)
+        foreach ($category->children as $subcat) {
+            foreach ($subcat->children as $subsubcat) {
+                $this->insertCategoryWithType($magasinId, $subsubcat, 'subsubcategory');
             }
         }
     }
-    
-    // Fonction pour insérer une sous-sous-catégorie seule
-    private function insertSubsubcategory($magasinId, $categoryId)
+
+    private function insertCategoryWithType($magasinId, $category, $type)
     {
-        // Trouver la sous-sous-catégorie et sa hiérarchie
-        $subsubcat = Category::find($categoryId);
-    
-        if (!$subsubcat || !$subsubcat->parent) {
-            return; // Si la sous-sous-catégorie ou son parent n'existe pas, arrêtez
+        $subcategoryId = null;
+        $mainCategoryId = null;
+
+        if ($type === 'category') {
+            $mainCategoryId = $category->id;
+        } elseif ($type === 'subcategory') {
+            $subcategoryId = $category->id;
+            $mainCategoryId = $category->parent_id;
+        } else {
+            $subcategoryId = $category->parent_id;
+            $mainCategoryId = $category->parent->parent_id ?? null;
         }
-    
-        $subcategoryId = $subsubcat->parent_id;
-        $mainCategoryId = $subsubcat->parent->parent_id ?? null;
-    
-        // Insérer la sous-sous-catégorie seule
-        DB::table('magasin_category')->insert([
-            'magasin_id' => $magasinId,
-            'category_id' => $categoryId,
-            'subcategory_id' => $subcategoryId,
-            'main_category_id' => $mainCategoryId,
-            'type' => 'subsubcategory',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+
+        // Vérifie si l'enregistrement existe déjà pour éviter les doublons
+        if (!$this->entryExists($magasinId, $category->id, $subcategoryId, $mainCategoryId, $type)) {
+            // Insertion dans la table magasin_category
+            DB::table('magasin_category')->insert([
+                'magasin_id' => $magasinId,
+                'category_id' => $category->id,
+                'subcategory_id' => $subcategoryId,
+                'main_category_id' => $mainCategoryId,
+                'type' => $type,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    private function entryExists($magasinId, $categoryId, $subcategoryId, $mainCategoryId, $type)
+    {
+        return DB::table('magasin_category')
+            ->where('magasin_id', $magasinId)
+            ->where('category_id', $categoryId)
+            ->where('subcategory_id', $subcategoryId)
+            ->where('main_category_id', $mainCategoryId)
+            ->where('type', $type)
+            ->exists();
     }
 }
